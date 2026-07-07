@@ -1,14 +1,29 @@
-import Image from "next/image";
-import { Button } from "@/components/ui/button";
 import DraftMermaid from "./test-mermaid";
 
 export default function Home() {
+  const mermaidChart = `
+      graph TD;
+      subgraph AA [Consumers]
+      A[Mobile app];
+      B[Web app];
+      C[Node.js client];
+      end
+      subgraph BB [Services]
+      E[REST API];
+      F[GraphQL API];
+      G[SOAP API];
+      end
+      Z[GraphQL API];
+      A --> Z;
+      B --> Z;
+      C --> Z;
+      Z --> E;
+      Z --> F;
+      Z --> G;`;
+
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Button>Test shadcn/ui Button</Button>
-        <DraftMermaid />
-      </main>
+      <DraftMermaid chart={mermaidChart} />
     </div>
   );
 }
