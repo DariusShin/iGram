@@ -31,7 +31,8 @@ export default function Mermaid({ chart }: MermaidProps) {
         elementRef.current.innerHTML = svg;
       } catch (error) {
         console.error("Mermaid rendering failed:", error);
-        elementRef.current.innerHTML = "<p class='text-red-500 text-sm'>Failed to render diagram.</p>";
+        elementRef.current.innerHTML =
+          "<p class='text-red-500 text-sm'>Failed to render diagram.</p>";
       }
     };
 
