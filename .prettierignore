@@ -1,0 +1,13 @@
+.next/
+node_modules/
+dist/
+build/
+public/
+coverage/
+*.yml
+*.yaml
+.env
+.env.local
+package-lock.json
+package.json
+*.md
