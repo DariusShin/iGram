@@ -15,19 +15,73 @@ import {
   Loader2,
   Moon,
   RotateCcw,
+  ShieldAlert,
   Sparkles,
   Sun,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 
+import {
+  PlantUmlClientError,
+  renderPlantUmlPreview,
+} from "@/features/rendering/plantuml-client";
+import {
+  applyPlantUmlTheme,
+  getPlantUmlThemeFromSource,
+  PLANTUML_THEME_NONE,
+  PLANTUML_THEMES,
+  type PlantUmlTheme,
+} from "@/features/rendering/plantuml-theme";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 type ThemeMode = "light" | "dark";
+type DiagramLanguage = "mermaid" | "plantuml";
 type RenderState = "idle" | "waiting" | "rendering" | "rendered" | "error";
 type CopiedType = "code" | "svg" | null;
 
-const TEMPLATES = [
+interface Template {
+  name: string;
+  desc: string;
+  code: string;
+}
+
+interface MermaidPreview {
+  language: "mermaid";
+  source: string;
+  svgHtml: string;
+  renderMs: number;
+}
+
+interface PlantUmlPreview {
+  language: "plantuml";
+  source: string;
+  objectUrl: string;
+  svgText?: string;
+  blob: Blob;
+  contentType: "image/svg+xml" | "image/png";
+  renderMs: number;
+}
+
+type PreviewResult = MermaidPreview | PlantUmlPreview;
+type Drafts = Record<DiagramLanguage, string>;
+type RenderStates = Record<DiagramLanguage, RenderState>;
+type RenderErrors = Record<DiagramLanguage, string>;
+type RenderResults = Partial<Record<DiagramLanguage, PreviewResult>>;
+
+const DEFAULT_ZOOM = 1;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2;
+const DRAFT_STORAGE_KEY = "igram-diagram-drafts-v1";
+
+const MERMAID_TEMPLATES: Template[] = [
   {
     name: "iGram Architecture",
     desc: "Classic workspace flow from source to preview",
@@ -77,38 +131,51 @@ flowchart LR
     Suspended --> ActiveSession : Re-authenticate
     ActiveSession --> Idle : User logout`,
   },
+];
+
+const PLANTUML_TEMPLATES: Template[] = [
   {
-    name: "Gantt Chart",
-    desc: "Project scheduling, timelines, and milestones",
-    code: `gantt
-    title Product Launch Timeline
-    dateFormat YYYY-MM-DD
-    section Strategy
-    Market Research  :done, des1, 2026-07-01, 2026-07-05
-    Product Design   :active, des2, 2026-07-05, 10d
-    section Launch
-    Beta Testing     :2026-07-28, 7d
-    Public Launch    :2026-08-05, 1d`,
+    name: "PlantUML Sequence",
+    desc: "Client, API, and public server flow",
+    code: `@startuml
+title iGram PlantUML render flow
+actor User
+participant "iGram Workspace" as UI
+participant "POST /api/plantuml/render" as API
+participant "PlantUML Public Server" as PUML
+
+User -> UI: Edit PlantUML source
+UI -> API: Render request
+API -> PUML: Encoded source
+PUML --> API: SVG image
+API --> UI: Validated SVG
+UI --> User: Preview decoded image
+@enduml`,
   },
   {
-    name: "Mindmap",
-    desc: "Brainstorming and hierarchical nodes",
-    code: `mindmap
-  root((Developer Tools))
-    Editor
-      Monaco
-      VS Code
-    Framework
-      Next.js
-      React
-    Styling
-      Tailwind CSS`,
+    name: "Component Diagram",
+    desc: "Workspace and render boundary",
+    code: `@startuml
+skinparam componentStyle rectangle
+component "Browser Workspace" as Browser
+component "Next.js Route Handler" as Route
+cloud "Official PlantUML\\nPublic Server" as PlantUML
+
+Browser --> Route : source + format
+Route --> PlantUML : encoded request
+PlantUML --> Route : rendered media
+Route --> Browser : validated image
+@enduml`,
   },
 ];
 
-const DEFAULT_ZOOM = 1;
+const DEFAULT_DRAFTS: Drafts = {
+  mermaid: MERMAID_TEMPLATES[0].code,
+  plantuml: PLANTUML_TEMPLATES[0].code,
+};
 
-function getErrorMessage(err: unknown) {
+function getErrorMessage(err: unknown): string {
+  if (err instanceof PlantUmlClientError) return err.message;
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   if (
@@ -119,10 +186,33 @@ function getErrorMessage(err: unknown) {
   ) {
     return (err as { str: string }).str;
   }
-  return "Invalid Mermaid syntax";
+  return "The diagram could not be rendered.";
 }
 
-function downloadBlob(blob: Blob, fileName: string) {
+function loadDrafts(): Drafts {
+  if (typeof window === "undefined") return DEFAULT_DRAFTS;
+
+  try {
+    const savedDrafts = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!savedDrafts) return DEFAULT_DRAFTS;
+
+    const parsed = JSON.parse(savedDrafts) as Partial<Drafts>;
+    return {
+      mermaid:
+        typeof parsed.mermaid === "string"
+          ? parsed.mermaid
+          : DEFAULT_DRAFTS.mermaid,
+      plantuml:
+        typeof parsed.plantuml === "string"
+          ? parsed.plantuml
+          : DEFAULT_DRAFTS.plantuml,
+    };
+  } catch {
+    return DEFAULT_DRAFTS;
+  }
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -133,7 +223,7 @@ function downloadBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
-function getSvgSize(svgHtml: string) {
+function getSvgSize(svgHtml: string): { width: number; height: number } {
   const fallback = { width: 1200, height: 800 };
   const svg = new DOMParser().parseFromString(
     svgHtml,
@@ -153,12 +243,29 @@ function getSvgSize(svgHtml: string) {
   return fallback;
 }
 
-export default function MermaidEditor() {
-  const [code, setCode] = useState(TEMPLATES[0].code);
-  const [svgHtml, setSvgHtml] = useState("");
-  const [error, setError] = useState("");
-  const [renderState, setRenderState] = useState<RenderState>("waiting");
-  const [renderMs, setRenderMs] = useState<number | null>(null);
+function clampZoom(value: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+}
+
+function revokePlantUmlResult(result: PreviewResult | undefined): void {
+  if (result?.language === "plantuml") {
+    URL.revokeObjectURL(result.objectUrl);
+  }
+}
+
+export default function DiagramWorkspace() {
+  const [activeLanguage, setActiveLanguage] =
+    useState<DiagramLanguage>("mermaid");
+  const [drafts, setDrafts] = useState<Drafts>(() => loadDrafts());
+  const [results, setResults] = useState<RenderResults>({});
+  const [renderStates, setRenderStates] = useState<RenderStates>({
+    mermaid: "waiting",
+    plantuml: "idle",
+  });
+  const [errors, setErrors] = useState<RenderErrors>({
+    mermaid: "",
+    plantuml: "",
+  });
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [copiedType, setCopiedType] = useState<CopiedType>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -174,10 +281,33 @@ export default function MermaidEditor() {
 
   const templateRef = useRef<HTMLDivElement>(null);
   const exportRef = useRef<HTMLDivElement>(null);
-  const renderId = useRef(0);
+  const mermaidRenderId = useRef(0);
+  const plantUmlRenderId = useRef(0);
+  const plantUmlAbortController = useRef<AbortController | null>(null);
+  const resultsRef = useRef<RenderResults>(results);
 
   const isDark = themeMode === "dark";
-  const canExport = Boolean(svgHtml) && !error && renderState === "rendered";
+  const code = drafts[activeLanguage];
+  const activeResult = results[activeLanguage];
+  const activeRenderState = renderStates[activeLanguage];
+  const activeError = errors[activeLanguage];
+  const activeTemplates =
+    activeLanguage === "mermaid" ? MERMAID_TEMPLATES : PLANTUML_TEMPLATES;
+  const selectedPlantUmlTheme = useMemo(
+    () => getPlantUmlThemeFromSource(drafts.plantuml),
+    [drafts.plantuml],
+  );
+  const isStale = Boolean(activeResult && activeResult.source !== code);
+  const isPlantUmlLoading =
+    activeLanguage === "plantuml" && activeRenderState === "rendering";
+  const canExport = Boolean(
+    activeResult &&
+    activeResult.source === code &&
+    activeRenderState === "rendered" &&
+    !activeError &&
+    !isPlantUmlLoading,
+  );
+
   const lineStats = useMemo(() => {
     if (!code) return { line: 1, col: 1 };
     const lines = code.split(/\r\n|\r|\n/);
@@ -195,39 +325,58 @@ export default function MermaidEditor() {
         tone: "neutral" as const,
       };
     }
-    if (renderState === "rendering") {
+
+    if (activeRenderState === "rendering") {
       return {
         pill: "Rendering",
-        footer: "Rendering preview...",
+        footer:
+          activeLanguage === "plantuml"
+            ? "Rendering with PlantUML public server..."
+            : "Rendering preview...",
         tone: "blue" as const,
       };
     }
-    if (renderState === "waiting") {
+
+    if (activeRenderState === "waiting" || isStale) {
       return {
         pill: "Stale - rendering soon",
-        footer: "Waiting for you to stop typing - auto-render in 400 ms",
+        footer: "Waiting for you to stop typing - auto-render in 500 ms",
         tone: "amber" as const,
       };
     }
-    if (renderState === "error") {
+
+    if (activeRenderState === "error") {
       return {
         pill: "Render failed",
-        footer: "Syntax error - fix the source or press Retry",
+        footer:
+          activeLanguage === "plantuml"
+            ? "PlantUML render failed - press Retry"
+            : "Syntax error - fix the source or press Retry",
         tone: "red" as const,
       };
     }
+
+    const renderMs = activeResult?.renderMs;
     return {
       pill: renderMs ? `Rendered - ${renderMs} ms` : "Rendered",
       footer: renderMs
-        ? `Rendered in ${renderMs} ms - Mermaid v11 - SVG sanitized`
-        : "Rendered - Mermaid v11 - SVG sanitized",
+        ? `Rendered in ${renderMs} ms - ${activeLanguage === "plantuml" ? "PlantUML" : "Mermaid"}`
+        : "Rendered",
       tone: "green" as const,
     };
-  }, [code, renderMs, renderState]);
+  }, [activeLanguage, activeRenderState, activeResult, code, isStale]);
+
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
 
   useEffect(() => {
     window.localStorage.setItem("igram-theme", themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
+  }, [drafts]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -244,55 +393,161 @@ export default function MermaidEditor() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const renderDiagram = useCallback(async () => {
-    const source = code.trim();
-    if (!source) {
-      setSvgHtml("");
-      setError("");
-      setRenderMs(null);
-      setRenderState("idle");
-      return;
-    }
+  useEffect(() => {
+    return () => {
+      revokePlantUmlResult(resultsRef.current.plantuml);
+      plantUmlAbortController.current?.abort();
+    };
+  }, []);
 
-    const currentId = renderId.current + 1;
-    renderId.current = currentId;
-    setRenderState("rendering");
+  const updateResult = useCallback(
+    (language: DiagramLanguage, result: PreviewResult): void => {
+      setResults((current) => {
+        if (language === "plantuml") {
+          revokePlantUmlResult(current.plantuml);
+        }
 
-    try {
-      const startedAt = performance.now();
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: isDark ? "dark" : "default",
-        suppressErrorRendering: true,
-        securityLevel: "loose",
+        return {
+          ...current,
+          [language]: result,
+        };
       });
+    },
+    [],
+  );
 
-      const { svg } = await mermaid.render(`mermaid-svg-${currentId}`, code);
-      if (renderId.current !== currentId) return;
+  const renderMermaidDiagram = useCallback(
+    async (source: string): Promise<void> => {
+      const currentId = mermaidRenderId.current + 1;
+      mermaidRenderId.current = currentId;
+      const startedAt = performance.now();
 
-      setSvgHtml(svg);
-      setError("");
-      setRenderMs(Math.max(1, Math.round(performance.now() - startedAt)));
-      setRenderState("rendered");
-      setShowExportMenu(true);
-    } catch (err) {
-      if (renderId.current !== currentId) return;
+      setRenderStates((current) => ({ ...current, mermaid: "rendering" }));
+      setErrors((current) => ({ ...current, mermaid: "" }));
 
-      setError(getErrorMessage(err));
-      setRenderMs(null);
-      setRenderState("error");
-    }
-  }, [code, isDark]);
+      try {
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: isDark ? "dark" : "default",
+          suppressErrorRendering: true,
+          securityLevel: "strict",
+        });
+
+        const { svg } = await mermaid.render(
+          `mermaid-svg-${currentId}`,
+          source,
+        );
+        if (mermaidRenderId.current !== currentId) return;
+
+        updateResult("mermaid", {
+          language: "mermaid",
+          source,
+          svgHtml: svg,
+          renderMs: Math.max(1, Math.round(performance.now() - startedAt)),
+        });
+        setRenderStates((current) => ({ ...current, mermaid: "rendered" }));
+        setShowExportMenu(true);
+      } catch (err) {
+        if (mermaidRenderId.current !== currentId) return;
+
+        setErrors((current) => ({ ...current, mermaid: getErrorMessage(err) }));
+        setRenderStates((current) => ({ ...current, mermaid: "error" }));
+      }
+    },
+    [isDark, updateResult],
+  );
+
+  const renderPlantUmlDiagram = useCallback(
+    async (source: string): Promise<void> => {
+      plantUmlAbortController.current?.abort();
+
+      const currentId = plantUmlRenderId.current + 1;
+      plantUmlRenderId.current = currentId;
+      const controller = new AbortController();
+      plantUmlAbortController.current = controller;
+      const startedAt = performance.now();
+
+      setRenderStates((current) => ({ ...current, plantuml: "rendering" }));
+      setErrors((current) => ({ ...current, plantuml: "" }));
+
+      try {
+        const preview = await renderPlantUmlPreview({
+          source,
+          format: "svg",
+          signal: controller.signal,
+        });
+
+        if (plantUmlRenderId.current !== currentId) {
+          URL.revokeObjectURL(preview.objectUrl);
+          return;
+        }
+
+        updateResult("plantuml", {
+          language: "plantuml",
+          source,
+          objectUrl: preview.objectUrl,
+          blob: preview.blob,
+          contentType: preview.contentType,
+          svgText: preview.svgText,
+          renderMs: Math.max(1, Math.round(performance.now() - startedAt)),
+        });
+        setRenderStates((current) => ({ ...current, plantuml: "rendered" }));
+        setShowExportMenu(true);
+      } catch (err) {
+        if (plantUmlRenderId.current !== currentId) return;
+
+        setErrors((current) => ({
+          ...current,
+          plantuml: getErrorMessage(err),
+        }));
+        setRenderStates((current) => ({ ...current, plantuml: "error" }));
+      } finally {
+        if (plantUmlRenderId.current === currentId) {
+          plantUmlAbortController.current = null;
+        }
+      }
+    },
+    [updateResult],
+  );
+
+  const renderActiveDiagram = useCallback(
+    async (
+      language: DiagramLanguage = activeLanguage,
+      source: string = drafts[activeLanguage],
+    ): Promise<void> => {
+      if (!source.trim()) {
+        setRenderStates((current) => ({ ...current, [language]: "idle" }));
+        setErrors((current) => ({ ...current, [language]: "" }));
+        return;
+      }
+
+      if (language === "mermaid") {
+        await renderMermaidDiagram(source);
+      } else {
+        await renderPlantUmlDiagram(source);
+      }
+    },
+    [activeLanguage, drafts, renderMermaidDiagram, renderPlantUmlDiagram],
+  );
 
   useEffect(() => {
     if (!code.trim()) return;
+    if (activeResult?.source === code && activeRenderState === "rendered") {
+      return;
+    }
 
     const debounceTimeout = window.setTimeout(() => {
-      void renderDiagram();
-    }, 400);
+      void renderActiveDiagram(activeLanguage, code);
+    }, 500);
 
     return () => window.clearTimeout(debounceTimeout);
-  }, [code, renderDiagram]);
+  }, [
+    activeLanguage,
+    activeRenderState,
+    activeResult?.source,
+    code,
+    renderActiveDiagram,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -301,7 +556,7 @@ export default function MermaidEditor() {
 
       if (event.key === "Enter") {
         event.preventDefault();
-        void renderDiagram();
+        void renderActiveDiagram(activeLanguage, code);
       }
 
       if (event.key.toLowerCase() === "e") {
@@ -312,7 +567,7 @@ export default function MermaidEditor() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [renderDiagram]);
+  }, [activeLanguage, code, renderActiveDiagram]);
 
   const handleEditorWillMount = (monaco: Monaco) => {
     try {
@@ -324,25 +579,61 @@ export default function MermaidEditor() {
 
   const handleCodeChange = (value?: string) => {
     const nextCode = value || "";
-    setCode(nextCode);
-    setCopiedType(null);
-    setError("");
 
-    if (!nextCode.trim()) {
-      setSvgHtml("");
-      setRenderMs(null);
-      setRenderState("idle");
-    } else {
-      setRenderState("waiting");
-    }
+    setDrafts((current) => ({
+      ...current,
+      [activeLanguage]: nextCode,
+    }));
+    setCopiedType(null);
+    setErrors((current) => ({ ...current, [activeLanguage]: "" }));
+
+    setRenderStates((current) => ({
+      ...current,
+      [activeLanguage]: nextCode.trim() ? "waiting" : "idle",
+    }));
   };
 
   const selectTemplate = (templateCode: string) => {
-    setCode(templateCode);
-    setError("");
-    setRenderState("waiting");
+    setDrafts((current) => ({
+      ...current,
+      [activeLanguage]: templateCode,
+    }));
+    setErrors((current) => ({ ...current, [activeLanguage]: "" }));
+    setRenderStates((current) => ({ ...current, [activeLanguage]: "waiting" }));
     setShowTemplates(false);
     setZoom(DEFAULT_ZOOM);
+  };
+
+  const handlePlantUmlThemeChange = useCallback(
+    (theme: PlantUmlTheme) => {
+      const nextCode = applyPlantUmlTheme(drafts.plantuml, theme);
+
+      setDrafts((current) => ({
+        ...current,
+        plantuml: nextCode,
+      }));
+      setCopiedType(null);
+      setErrors((current) => ({ ...current, plantuml: "" }));
+      setRenderStates((current) => ({
+        ...current,
+        plantuml: nextCode.trim() ? "waiting" : "idle",
+      }));
+    },
+    [drafts.plantuml],
+  );
+
+  const switchLanguage = (language: DiagramLanguage) => {
+    setActiveLanguage(language);
+    setCopiedType(null);
+    setShowTemplates(false);
+    setShowExportMenu(true);
+
+    const nextCode = drafts[language];
+    if (!nextCode.trim()) {
+      setRenderStates((current) => ({ ...current, [language]: "idle" }));
+    } else if (results[language]?.source !== nextCode) {
+      setRenderStates((current) => ({ ...current, [language]: "waiting" }));
+    }
   };
 
   const handleCopyCode = async () => {
@@ -353,30 +644,55 @@ export default function MermaidEditor() {
     window.setTimeout(() => setCopiedType(null), 2000);
   };
 
-  const handleCopySvg = async () => {
-    if (!svgHtml) return;
+  const getCurrentSvgText = async (): Promise<string> => {
+    if (!activeResult) return "";
+    if (activeResult.language === "mermaid") return activeResult.svgHtml;
+    if (activeResult.svgText) return activeResult.svgText;
+    if (activeResult.contentType === "image/svg+xml") {
+      return activeResult.blob.text();
+    }
+    return "";
+  };
 
-    await navigator.clipboard.writeText(svgHtml);
+  const handleCopySvg = async () => {
+    const svgText = await getCurrentSvgText();
+    if (!svgText) return;
+
+    await navigator.clipboard.writeText(svgText);
     setCopiedType("svg");
     window.setTimeout(() => setCopiedType(null), 2000);
   };
 
-  const handleDownloadSvg = () => {
-    if (!svgHtml) return;
+  const handleDownloadSvg = async () => {
+    const svgText = await getCurrentSvgText();
+    if (!svgText) return;
+
     downloadBlob(
-      new Blob([svgHtml], { type: "image/svg+xml;charset=utf-8" }),
+      new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }),
       "igram-diagram.svg",
     );
     setShowExportMenu(false);
   };
 
-  const handleDownloadPng = () => {
-    if (!svgHtml) return;
+  const handleDownloadPng = async () => {
+    if (!activeResult) return;
 
-    const { width, height } = getSvgSize(svgHtml);
+    if (
+      activeResult.language === "plantuml" &&
+      activeResult.contentType === "image/png"
+    ) {
+      downloadBlob(activeResult.blob, "igram-diagram.png");
+      setShowExportMenu(false);
+      return;
+    }
+
+    const svgText = await getCurrentSvgText();
+    if (!svgText) return;
+
+    const { width, height } = getSvgSize(svgText);
     const image = new window.Image();
     const url = URL.createObjectURL(
-      new Blob([svgHtml], { type: "image/svg+xml;charset=utf-8" }),
+      new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }),
     );
 
     image.onload = () => {
@@ -404,11 +720,13 @@ export default function MermaidEditor() {
       }, "image/png");
     };
 
+    image.onerror = () => URL.revokeObjectURL(url);
     image.src = url;
   };
 
-  const handleDownloadHtml = () => {
-    if (!svgHtml) return;
+  const handleDownloadHtml = async () => {
+    const svgText = await getCurrentSvgText();
+    if (!svgText) return;
 
     const html = `<!doctype html>
 <html lang="en">
@@ -430,7 +748,7 @@ export default function MermaidEditor() {
   </style>
 </head>
 <body>
-${svgHtml}
+${svgText}
 </body>
 </html>`;
 
@@ -451,6 +769,10 @@ ${svgHtml}
       )}
     >
       <div className="flex h-full w-full flex-col overflow-hidden border-slate-200 bg-white shadow-2xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-950 dark:shadow-black/30">
+        <div className="sr-only" aria-live="polite">
+          {statusCopy.footer}
+        </div>
+
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 dark:border-slate-800 dark:bg-slate-950">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex size-10 overflow-hidden rounded-lg border border-slate-900/10 bg-slate-950 shadow-sm dark:border-white/10">
@@ -513,25 +835,23 @@ ${svgHtml}
         <div className="grid shrink-0 border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 md:grid-cols-[minmax(360px,45%)_1fr]">
           <section className="flex min-h-14 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800 md:border-b-0 md:border-r">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-14 items-end gap-5">
-                <button
-                  type="button"
-                  className="relative h-12 px-1 text-sm font-bold text-slate-950 dark:text-white"
-                >
-                  Mermaid
-                  {error && (
-                    <span className="absolute right-[-9px] top-3 size-2 rounded-full bg-red-500" />
-                  )}
-                  <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />
-                </button>
-                <button
-                  type="button"
-                  disabled
-                  className="h-12 px-1 text-sm font-semibold text-slate-500 opacity-80 dark:text-slate-400"
-                  title="PlantUML rendering is not enabled in this build"
-                >
-                  PlantUML
-                </button>
+              <div
+                className="flex h-14 items-end gap-5"
+                role="tablist"
+                aria-label="Diagram language"
+              >
+                <LanguageTab
+                  language="mermaid"
+                  activeLanguage={activeLanguage}
+                  hasError={Boolean(errors.mermaid)}
+                  onClick={switchLanguage}
+                />
+                <LanguageTab
+                  language="plantuml"
+                  activeLanguage={activeLanguage}
+                  hasError={Boolean(errors.plantuml)}
+                  onClick={switchLanguage}
+                />
               </div>
 
               <div className="relative" ref={templateRef}>
@@ -552,7 +872,7 @@ ${svgHtml}
 
                 {showTemplates && (
                   <div className="absolute left-0 top-10 z-40 w-72 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40">
-                    {TEMPLATES.map((template) => (
+                    {activeTemplates.map((template) => (
                       <button
                         key={template.name}
                         type="button"
@@ -570,31 +890,44 @@ ${svgHtml}
                   </div>
                 )}
               </div>
+
+              {activeLanguage === "plantuml" && (
+                <PlantUmlThemeSelect
+                  value={selectedPlantUmlTheme}
+                  onValueChange={handlePlantUmlThemeChange}
+                />
+              )}
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
               <span
                 className={cn(
                   "hidden items-center gap-1.5 text-xs font-semibold md:inline-flex",
-                  renderState === "waiting"
+                  activeRenderState === "waiting" || isStale
                     ? "text-amber-700 dark:text-amber-300"
                     : "text-emerald-700 dark:text-emerald-300",
-                  renderState === "idle" &&
+                  activeRenderState === "idle" &&
                     "text-slate-500 dark:text-slate-400",
-                  renderState === "error" && "text-red-600 dark:text-red-300",
+                  activeRenderState === "error" &&
+                    "text-red-600 dark:text-red-300",
                 )}
               >
                 <span
                   className={cn(
                     "size-1.5 rounded-full",
-                    renderState === "waiting" && "bg-amber-500",
-                    renderState === "rendering" && "bg-blue-500",
-                    renderState === "rendered" && "bg-emerald-500",
-                    renderState === "idle" && "bg-slate-400",
-                    renderState === "error" && "bg-red-500",
+                    (activeRenderState === "waiting" || isStale) &&
+                      "bg-amber-500",
+                    activeRenderState === "rendering" && "bg-blue-500",
+                    activeRenderState === "rendered" &&
+                      !isStale &&
+                      "bg-emerald-500",
+                    activeRenderState === "idle" && "bg-slate-400",
+                    activeRenderState === "error" && "bg-red-500",
                   )}
                 />
-                {renderState === "waiting" ? "Unsaved edits" : "Draft saved"}
+                {activeRenderState === "waiting" || isStale
+                  ? "Unsaved edits"
+                  : "Draft saved"}
               </span>
               <button
                 type="button"
@@ -611,23 +944,23 @@ ${svgHtml}
               </button>
               <button
                 type="button"
-                onClick={() => void renderDiagram()}
-                disabled={!code.trim() || renderState === "rendering"}
+                onClick={() => void renderActiveDiagram(activeLanguage, code)}
+                disabled={!code.trim() || activeRenderState === "rendering"}
                 className={cn(
                   "inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-bold shadow-sm transition active:translate-y-px disabled:pointer-events-none disabled:opacity-50",
-                  renderState === "waiting"
+                  activeRenderState === "waiting" || isStale
                     ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700"
                     : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800",
                 )}
               >
-                {renderState === "rendering" ? (
+                {activeRenderState === "rendering" ? (
                   <Loader2 className="size-4 animate-spin" />
-                ) : error ? (
+                ) : activeError ? (
                   <RotateCcw className="size-4" />
                 ) : null}
-                {error
+                {activeError
                   ? "Retry"
-                  : renderState === "waiting"
+                  : activeRenderState === "waiting" || isStale
                     ? "Render now"
                     : "Render"}
               </button>
@@ -641,9 +974,7 @@ ${svgHtml}
               <div className="hidden items-center rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900 sm:flex">
                 <button
                   type="button"
-                  onClick={() =>
-                    setZoom((current) => Math.max(0.5, current - 0.1))
-                  }
+                  onClick={() => setZoom((current) => clampZoom(current - 0.1))}
                   className="flex size-8 items-center justify-center text-slate-700 transition hover:bg-slate-50 active:translate-y-px dark:text-slate-200 dark:hover:bg-slate-800"
                   title="Zoom out"
                 >
@@ -659,9 +990,7 @@ ${svgHtml}
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setZoom((current) => Math.min(2.5, current + 0.1))
-                  }
+                  onClick={() => setZoom((current) => clampZoom(current + 0.1))}
                   className="flex size-8 items-center justify-center border-r border-slate-200 text-slate-700 transition hover:bg-slate-50 active:translate-y-px dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                   title="Zoom in"
                 >
@@ -680,7 +1009,7 @@ ${svgHtml}
                 <button
                   type="button"
                   onClick={() => setShowExportMenu((current) => !current)}
-                  disabled={!svgHtml}
+                  disabled={!activeResult}
                   className={cn(
                     "inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-bold shadow-sm transition active:translate-y-px disabled:pointer-events-none disabled:bg-slate-300 disabled:text-white dark:disabled:bg-slate-700",
                     canExport
@@ -690,7 +1019,7 @@ ${svgHtml}
                   title={
                     canExport
                       ? "Open export menu"
-                      : "Exports are enabled after a valid render"
+                      : "Exports are enabled after the latest valid render"
                   }
                 >
                   <Download className="size-4 sm:hidden" />
@@ -698,28 +1027,37 @@ ${svgHtml}
                   <ChevronDown className="size-3.5" />
                 </button>
 
-                {showExportMenu && canExport && (
+                {showExportMenu && activeResult && (
                   <div className="absolute right-0 top-11 z-40 w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40">
+                    {!canExport && (
+                      <div className="mb-1 rounded-md bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:bg-amber-400/10 dark:text-amber-200">
+                        Exports are disabled until the latest preview is ready.
+                      </div>
+                    )}
                     <ExportMenuItem
                       label="SVG"
                       desc="Vector - documents and editing"
-                      onClick={handleDownloadSvg}
+                      disabled={!canExport}
+                      onClick={() => void handleDownloadSvg()}
                     />
                     <ExportMenuItem
                       label="PNG"
                       desc="Raster at 2x - slides and sharing"
-                      onClick={handleDownloadPng}
+                      disabled={!canExport}
+                      onClick={() => void handleDownloadPng()}
                     />
                     <ExportMenuItem
                       label="Standalone HTML"
                       desc="Self-contained sanitized page"
-                      onClick={handleDownloadHtml}
+                      disabled={!canExport}
+                      onClick={() => void handleDownloadHtml()}
                     />
                     <div className="mt-1 border-t border-slate-100 pt-1 dark:border-slate-800">
                       <button
                         type="button"
-                        onClick={handleCopySvg}
-                        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                        onClick={() => void handleCopySvg()}
+                        disabled={!canExport}
+                        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-45 dark:text-slate-200 dark:hover:bg-slate-800"
                       >
                         {copiedType === "svg" ? (
                           <Check className="size-4 text-emerald-600" />
@@ -740,8 +1078,12 @@ ${svgHtml}
           <section className="flex min-h-0 flex-col border-b border-slate-200 bg-[#181b22] dark:border-slate-800 md:border-b-0 md:border-r">
             <div className="flex-1 overflow-hidden">
               <Editor
+                key={activeLanguage}
                 height="100%"
-                defaultLanguage="mermaid"
+                defaultLanguage={
+                  activeLanguage === "mermaid" ? "mermaid" : "text"
+                }
+                language={activeLanguage === "mermaid" ? "mermaid" : "text"}
                 theme="mermaid-dark"
                 value={code}
                 onChange={handleCodeChange}
@@ -763,16 +1105,40 @@ ${svgHtml}
               />
             </div>
 
-            {error && (
+            {activeLanguage === "plantuml" && (
+              <div className="border-t border-blue-400/20 bg-blue-950/30 px-5 py-3 text-xs leading-5 text-blue-50/85">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 size-4 shrink-0 text-blue-200" />
+                  <p>
+                    PlantUML source is sent through this app to the official
+                    public PlantUML server. Do not submit confidential diagrams
+                    during Phase 1.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {activeError && (
               <div className="border-t border-red-500/30 bg-red-950/35 px-5 py-4 text-red-100">
-                <div className="flex items-center gap-2 text-sm font-bold text-red-100">
-                  <span className="flex size-6 items-center justify-center rounded-full bg-red-500 text-white">
-                    <AlertCircle className="size-4" />
-                  </span>
-                  Syntax error
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-red-100">
+                    <span className="flex size-6 items-center justify-center rounded-full bg-red-500 text-white">
+                      <AlertCircle className="size-4" />
+                    </span>
+                    Render error
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void renderActiveDiagram(activeLanguage, code)
+                    }
+                    className="rounded-md border border-red-200/30 px-2.5 py-1 text-xs font-bold text-red-50 transition hover:bg-red-500/20"
+                  >
+                    Retry
+                  </button>
                 </div>
                 <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap pl-8 font-mono text-xs leading-5 text-red-100/85">
-                  {error}
+                  {activeError}
                 </p>
               </div>
             )}
@@ -787,54 +1153,41 @@ ${svgHtml}
               backgroundSize: "24px 24px",
             }}
           >
-            {renderState === "error" && svgHtml && (
+            {activeResult && (isStale || activeRenderState === "error") && (
               <div className="pointer-events-none absolute left-6 top-6 z-10 inline-flex rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-800 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Showing last valid render
+                Showing previous valid render
               </div>
             )}
 
-            {svgHtml ? (
+            {activeResult ? (
               <div className="flex min-h-full min-w-full items-center justify-center p-10">
-                <div
-                  className={cn(
-                    "origin-center transition-transform duration-200 [&_svg]:max-w-none",
-                    renderState === "error" && "opacity-50",
-                  )}
-                  style={{
-                    transform: `scale(${zoom})`,
-                  }}
-                  dangerouslySetInnerHTML={{ __html: svgHtml }}
+                <PreviewMedia
+                  result={activeResult}
+                  stale={isStale || activeRenderState === "error"}
+                  zoom={zoom}
                 />
               </div>
+            ) : activeRenderState === "rendering" ? (
+              <CenteredLoading language={activeLanguage} />
             ) : (
-              <div className="flex min-h-full items-center justify-center p-8">
-                <div className="max-w-lg text-center">
-                  <div className="mx-auto mb-6 flex size-16 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-400/25 dark:bg-blue-400/10 dark:text-blue-200">
-                    <FileCode2 className="size-7" />
-                  </div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                    Nothing to preview yet
-                  </h2>
-                  <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    Paste diagram source in the editor, or start from a working
-                    example to see how iGram renders it.
-                  </p>
-                  <div className="mt-6 flex flex-wrap justify-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => selectTemplate(TEMPLATES[0].code)}
-                      className="h-10 rounded-md bg-blue-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 active:translate-y-px"
-                    >
-                      Insert Mermaid starter
-                    </button>
-                    <button
-                      type="button"
-                      disabled
-                      className="h-10 rounded-md border border-slate-200 bg-white px-4 text-sm font-bold text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                    >
-                      PlantUML starter
-                    </button>
-                  </div>
+              <EmptyPreview
+                language={activeLanguage}
+                onInsert={() => selectTemplate(activeTemplates[0].code)}
+                onRetry={
+                  activeError
+                    ? () => void renderActiveDiagram(activeLanguage, code)
+                    : undefined
+                }
+              />
+            )}
+
+            {activeResult && activeRenderState === "rendering" && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/55 backdrop-blur-[1px] dark:bg-slate-950/45">
+                <div className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700 shadow-lg dark:border-blue-400/30 dark:bg-slate-900 dark:text-blue-200">
+                  <Loader2 className="size-4 animate-spin" />
+                  {activeLanguage === "plantuml"
+                    ? "Rendering with PlantUML public server..."
+                    : "Rendering preview..."}
                 </div>
               </div>
             )}
@@ -857,6 +1210,170 @@ ${svgHtml}
             {code.trim() ? "Draft saved locally" : "No draft yet"}
           </span>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+function PlantUmlThemeSelect({
+  value,
+  onValueChange,
+}: {
+  value: PlantUmlTheme;
+  onValueChange: (theme: PlantUmlTheme) => void;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="hidden text-xs font-bold text-slate-500 dark:text-slate-400 xl:inline">
+        Theme
+      </span>
+      <Select<PlantUmlTheme>
+        value={value}
+        onValueChange={(nextTheme) =>
+          onValueChange(nextTheme ?? PLANTUML_THEME_NONE)
+        }
+      >
+        <SelectTrigger className="w-36 sm:w-44 lg:w-52" title="PlantUML theme">
+          <SelectValue>
+            {(theme: PlantUmlTheme | null) => theme ?? PLANTUML_THEME_NONE}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent sideOffset={8}>
+          {PLANTUML_THEMES.map((theme) => (
+            <SelectItem key={theme} value={theme} label={theme}>
+              {theme}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function LanguageTab({
+  language,
+  activeLanguage,
+  hasError,
+  onClick,
+}: {
+  language: DiagramLanguage;
+  activeLanguage: DiagramLanguage;
+  hasError: boolean;
+  onClick: (language: DiagramLanguage) => void;
+}) {
+  const active = language === activeLanguage;
+  const label = language === "mermaid" ? "Mermaid" : "PlantUML";
+
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={() => onClick(language)}
+      className={cn(
+        "relative h-12 px-1 text-sm font-bold",
+        active
+          ? "text-slate-950 dark:text-white"
+          : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
+      )}
+    >
+      {label}
+      {hasError && (
+        <span className="absolute right-[-9px] top-3 size-2 rounded-full bg-red-500" />
+      )}
+      {active && (
+        <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />
+      )}
+    </button>
+  );
+}
+
+function PreviewMedia({
+  result,
+  stale,
+  zoom,
+}: {
+  result: PreviewResult;
+  stale: boolean;
+  zoom: number;
+}) {
+  return (
+    <div
+      className={cn(
+        "origin-center transition-transform duration-200",
+        result.language === "mermaid" && "[&_svg]:max-w-none",
+        stale && "opacity-45",
+      )}
+      style={{ transform: `scale(${zoom})` }}
+    >
+      {result.language === "mermaid" ? (
+        <div dangerouslySetInnerHTML={{ __html: result.svgHtml }} />
+      ) : (
+        // Blob URLs returned by the render lifecycle are already decoded before display.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={result.objectUrl}
+          alt="Rendered PlantUML diagram"
+          className="max-w-none"
+        />
+      )}
+    </div>
+  );
+}
+
+function CenteredLoading({ language }: { language: DiagramLanguage }) {
+  return (
+    <div className="flex min-h-full items-center justify-center p-8">
+      <div className="inline-flex items-center gap-3 rounded-lg border border-blue-200 bg-white px-5 py-3 text-sm font-bold text-blue-700 shadow-sm dark:border-blue-400/30 dark:bg-slate-900 dark:text-blue-200">
+        <Loader2 className="size-5 animate-spin" />
+        {language === "plantuml"
+          ? "Rendering with PlantUML public server..."
+          : "Rendering preview..."}
+      </div>
+    </div>
+  );
+}
+
+function EmptyPreview({
+  language,
+  onInsert,
+  onRetry,
+}: {
+  language: DiagramLanguage;
+  onInsert: () => void;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="flex min-h-full items-center justify-center p-8">
+      <div className="max-w-lg text-center">
+        <div className="mx-auto mb-6 flex size-16 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-400/25 dark:bg-blue-400/10 dark:text-blue-200">
+          <FileCode2 className="size-7" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+          Nothing to preview yet
+        </h2>
+        <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+          Paste diagram source in the editor, or start from a working example to
+          see how iGram renders it.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <button
+            type="button"
+            onClick={onInsert}
+            className="h-10 rounded-md bg-blue-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 active:translate-y-px"
+          >
+            Insert {language === "mermaid" ? "Mermaid" : "PlantUML"} starter
+          </button>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="h-10 rounded-md border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Retry
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -906,17 +1423,20 @@ function StatusPill({
 function ExportMenuItem({
   label,
   desc,
+  disabled,
   onClick,
 }: {
   label: string;
   desc: string;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="block w-full rounded-md px-3 py-2.5 text-left transition hover:bg-blue-50 dark:hover:bg-slate-800"
+      className="block w-full rounded-md px-3 py-2.5 text-left transition hover:bg-blue-50 disabled:pointer-events-none disabled:opacity-45 dark:hover:bg-slate-800"
     >
       <span className="block text-sm font-bold text-slate-900 dark:text-slate-100">
         {label}
