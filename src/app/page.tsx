@@ -205,6 +205,12 @@ export default function DiagramWorkspace() {
       setErrors((current) => ({ ...current, mermaid: "" }));
 
       try {
+        // Theme customization (theme + themeVariables) is applied via the
+        // in-source `%%{init}%%` directive, which Mermaid honors even under
+        // securityLevel "strict": neither `theme` nor `themeVariables` is in
+        // Mermaid's `secure` key list, so diagram directives may set them.
+        // initialize() therefore only supplies the app light/dark base theme,
+        // which any in-source directive overrides per-diagram.
         mermaid.initialize({
           startOnLoad: false,
           theme: isDark ? "dark" : "default",
@@ -379,6 +385,16 @@ export default function DiagramWorkspace() {
     viewport.reset();
   };
 
+  const handleMermaidSourceChange = useCallback((nextCode: string) => {
+    setDrafts((current) => ({ ...current, mermaid: nextCode }));
+    setCopiedType(null);
+    setErrors((current) => ({ ...current, mermaid: "" }));
+    setRenderStates((current) => ({
+      ...current,
+      mermaid: nextCode.trim() ? "waiting" : "idle",
+    }));
+  }, []);
+
   const handlePlantUmlThemeChange = useCallback(
     (theme: PlantUmlTheme) => {
       const nextCode = applyPlantUmlTheme(drafts.plantuml, theme);
@@ -519,6 +535,8 @@ export default function DiagramWorkspace() {
             activeLanguage={activeLanguage}
             selectedPlantUmlTheme={selectedPlantUmlTheme}
             onPlantUmlThemeChange={handlePlantUmlThemeChange}
+            mermaidSource={drafts.mermaid}
+            onMermaidSourceChange={handleMermaidSourceChange}
             zoom={viewport.zoom}
             onZoomIn={viewport.zoomIn}
             onZoomOut={viewport.zoomOut}
