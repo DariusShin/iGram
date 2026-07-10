@@ -65,7 +65,8 @@ export default function DiagramWorkspace() {
   const viewport = useCanvasViewport();
   const [copiedType, setCopiedType] = useState<CopiedType>(null);
   const [showTemplates, setShowTemplates] = useState(false);
-  const [showExportMenu, setShowExportMenu] = useState(true);
+  // The export menu opens only on explicit user action (Export button, Ctrl+E).
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
 
   const mermaidRenderId = useRef(0);
@@ -235,7 +236,6 @@ export default function DiagramWorkspace() {
           renderMs: Math.max(1, Math.round(performance.now() - startedAt)),
         });
         setRenderStates((current) => ({ ...current, mermaid: "rendered" }));
-        setShowExportMenu(true);
       } catch (err) {
         if (mermaidRenderId.current !== currentId) return;
 
@@ -281,7 +281,6 @@ export default function DiagramWorkspace() {
           renderMs: Math.max(1, Math.round(performance.now() - startedAt)),
         });
         setRenderStates((current) => ({ ...current, plantuml: "rendered" }));
-        setShowExportMenu(true);
       } catch (err) {
         if (plantUmlRenderId.current !== currentId) return;
 
@@ -417,7 +416,7 @@ export default function DiagramWorkspace() {
     setActiveLanguage(language);
     setCopiedType(null);
     setShowTemplates(false);
-    setShowExportMenu(true);
+    setShowExportMenu(false);
 
     const nextCode = drafts[language];
     if (!nextCode.trim()) {
