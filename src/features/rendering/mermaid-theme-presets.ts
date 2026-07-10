@@ -26,6 +26,8 @@ export const MERMAID_THEME_PRESETS: MermaidThemePreset[] = [
       tertiaryColor: "#ffffff",
       mainBkg: "#ffffff",
       background: "#ffffff",
+      activationBorderColor: "#000000",
+      activationBackgroundColor: "#ffffff",
     },
   },
   {

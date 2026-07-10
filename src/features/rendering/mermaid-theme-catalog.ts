@@ -250,7 +250,7 @@ const SEQUENCE_VARIABLES: MermaidThemeVariable[] = [
     kind: "color",
   },
   {
-    key: "activationBkgColor",
+    key: "activationBackgroundColor",
     label: "Activation background",
     group: "Sequence",
     appliesTo: ["sequence"],
