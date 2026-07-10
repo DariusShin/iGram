@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ChevronDown, Palette } from "lucide-react";
+import { ChevronDown, Palette, RotateCcw } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
@@ -14,6 +14,7 @@ import {
 import {
   applyMermaidBaseTheme,
   applyMermaidThemeVariables,
+  clearMermaidTheme,
   getMermaidThemeConfig,
   MERMAID_THEMES,
   normalizeHexColor,
@@ -23,6 +24,7 @@ import {
   detectMermaidDiagramType,
   getMermaidColorVariables,
 } from "@/features/rendering/mermaid-theme-catalog";
+import { MERMAID_THEME_PRESETS } from "@/features/rendering/mermaid-theme-presets";
 
 interface MermaidThemePanelProps {
   source: string;
@@ -99,6 +101,7 @@ export function MermaidThemePanel({
     : null;
 
   const customizedCount = Object.keys(config.themeVariables).length;
+  const hasCustomization = customizedCount > 0 || config.theme !== undefined;
 
   const commitVariable = (key: string, value: string | null) => {
     onSourceChange(applyMermaidThemeVariables(source, { [key]: value }));
@@ -125,6 +128,29 @@ export function MermaidThemePanel({
 
   const handleThemeChange = (theme: MermaidTheme | null) => {
     onSourceChange(applyMermaidBaseTheme(source, theme));
+  };
+
+  const resetVariable = (key: string) => {
+    commitVariable(key, null);
+    clearDraft(key);
+  };
+
+  const resetAllColors = () => {
+    const keys = Object.keys(config.themeVariables);
+    if (keys.length === 0) return;
+    const cleared = Object.fromEntries(keys.map((key) => [key, null]));
+    onSourceChange(applyMermaidThemeVariables(source, cleared));
+    setHexDrafts({});
+  };
+
+  const clearTheme = () => {
+    onSourceChange(clearMermaidTheme(source));
+    setHexDrafts({});
+  };
+
+  const applyPreset = (variables: Record<string, string>) => {
+    onSourceChange(applyMermaidThemeVariables(source, variables));
+    setHexDrafts({});
   };
 
   return (
@@ -264,15 +290,62 @@ export function MermaidThemePanel({
                       textValue !== "" && !normalizeHexColor(textValue)
                     }
                     className={cn(
-                      "w-24 shrink-0 rounded border bg-white px-2 py-1 font-mono text-xs text-slate-800 outline-none focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 dark:bg-slate-950 dark:text-slate-100",
+                      "w-20 shrink-0 rounded border bg-white px-2 py-1 font-mono text-xs text-slate-800 outline-none focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 dark:bg-slate-950 dark:text-slate-100",
                       textValue !== "" && !normalizeHexColor(textValue)
                         ? "border-red-400 dark:border-red-500"
                         : "border-slate-200 dark:border-slate-700",
                     )}
                   />
+                  <button
+                    type="button"
+                    onClick={() => resetVariable(variable.key)}
+                    disabled={!isSet}
+                    aria-label={`Reset ${variable.label}`}
+                    title={`Reset ${variable.label} to default`}
+                    className="flex size-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:pointer-events-none disabled:opacity-30 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </button>
                 </div>
               );
             })}
+          </div>
+
+          <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <span className="mb-1.5 block text-xs font-semibold text-slate-600 dark:text-slate-300">
+              Presets
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {MERMAID_THEME_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  onClick={() => applyPreset(preset.variables)}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-blue-50 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={resetAllColors}
+              disabled={customizedCount === 0}
+              className="rounded-md px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-40 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Reset colors
+            </button>
+            <button
+              type="button"
+              onClick={clearTheme}
+              disabled={!hasCustomization}
+              className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Clear theme
+            </button>
           </div>
         </div>
       )}
