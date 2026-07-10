@@ -30,6 +30,45 @@ describe("MermaidThemePanel reset / preset / clear", () => {
     expect(config.themeVariables.lineColor).toBe("#0369a1");
   });
 
+  it("applies the Draw.io preset (white fills, black borders and text)", () => {
+    const onSourceChange = vi.fn();
+    render(
+      <MermaidThemePanel source={FLOWCHART} onSourceChange={onSourceChange} />,
+    );
+    openPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Draw.io" }));
+
+    const next = onSourceChange.mock.calls[0][0] as string;
+    const config = getMermaidThemeConfig(next);
+    expect(config.theme).toBe("base");
+    expect(config.themeVariables.primaryColor).toBe("#ffffff");
+    expect(config.themeVariables.mainBkg).toBe("#ffffff");
+    expect(config.themeVariables.primaryBorderColor).toBe("#000000");
+    expect(config.themeVariables.primaryTextColor).toBe("#000000");
+    expect(config.themeVariables.lineColor).toBe("#000000");
+  });
+
+  it("stays open when clicking inside the portaled base-theme select popup", () => {
+    render(<MermaidThemePanel source={FLOWCHART} onSourceChange={vi.fn()} />);
+    openPanel();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // Base UI portals the select options to <body>, outside the panel DOM.
+    const portaledOption = document.createElement("div");
+    portaledOption.setAttribute("data-slot", "select-content");
+    document.body.appendChild(portaledOption);
+    fireEvent.mouseDown(portaledOption);
+
+    expect(screen.queryByRole("dialog")).toBeTruthy();
+
+    // A genuine outside mousedown still closes the panel.
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    portaledOption.remove();
+  });
+
   it("resets a single variable to its default (removes the override)", () => {
     const onSourceChange = vi.fn();
     render(

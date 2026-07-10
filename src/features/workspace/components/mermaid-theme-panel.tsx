@@ -85,6 +85,13 @@ export function MermaidThemePanel({
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
+      // The base-theme select renders its options in a portal outside this
+      // panel; clicks on them must not count as "outside" or the panel
+      // unmounts before the selection is committed.
+      const element =
+        target instanceof Element ? target : (target.parentElement ?? null);
+      if (element?.closest('[data-slot="select-content"]')) return;
+
       if (containerRef.current && !containerRef.current.contains(target)) {
         setOpen(false);
       }

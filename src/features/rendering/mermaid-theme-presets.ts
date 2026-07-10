@@ -14,6 +14,21 @@ export interface MermaidThemePreset {
 
 export const MERMAID_THEME_PRESETS: MermaidThemePreset[] = [
   {
+    // Classic draw.io look: white shape/actor fills, black borders, black text.
+    name: "Draw.io",
+    variables: {
+      primaryColor: "#ffffff",
+      primaryBorderColor: "#000000",
+      primaryTextColor: "#000000",
+      lineColor: "#000000",
+      textColor: "#000000",
+      secondaryColor: "#ffffff",
+      tertiaryColor: "#ffffff",
+      mainBkg: "#ffffff",
+      background: "#ffffff",
+    },
+  },
+  {
     name: "Ocean",
     variables: {
       primaryColor: "#e0f2fe",
