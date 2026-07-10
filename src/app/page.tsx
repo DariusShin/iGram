@@ -210,6 +210,10 @@ export default function DiagramWorkspace() {
           theme: isDark ? "dark" : "default",
           suppressErrorRendering: true,
           securityLevel: "strict",
+          // Render labels as native SVG <text> instead of HTML <foreignObject>.
+          // foreignObject content cannot be drawn onto a <canvas>, which broke
+          // PNG export; SVG text rasterizes reliably.
+          htmlLabels: false,
         });
 
         const { svg } = await mermaid.render(

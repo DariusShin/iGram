@@ -103,6 +103,43 @@ export async function getSvgTextFromResult(
   return "";
 }
 
+/**
+ * Give the SVG explicit pixel dimensions so it has a determinate intrinsic size
+ * when loaded as an <img>. Mermaid emits `width="100%"` plus a `max-width` style,
+ * which otherwise makes the rasterized image blank or wrongly sized.
+ */
+function normalizeSvgForRaster(
+  svgText: string,
+  width: number,
+  height: number,
+): string {
+  const svg = new DOMParser().parseFromString(
+    svgText,
+    "image/svg+xml",
+  ).documentElement;
+
+  // If parsing failed, fall back to the original markup.
+  if (!svg || svg.nodeName.toLowerCase() !== "svg") return svgText;
+
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+  if (!svg.getAttribute("xmlns")) {
+    svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  }
+
+  const style = svg.getAttribute("style");
+  if (style) {
+    const cleaned = style.replace(/max-width\s*:[^;]*;?/gi, "").trim();
+    if (cleaned) {
+      svg.setAttribute("style", cleaned);
+    } else {
+      svg.removeAttribute("style");
+    }
+  }
+
+  return new XMLSerializer().serializeToString(svg);
+}
+
 /** Rasterize SVG markup to a 2x PNG blob on a themed background. */
 export function rasterizeSvgToPng(
   svgText: string,
@@ -110,9 +147,10 @@ export function rasterizeSvgToPng(
 ): Promise<Blob | null> {
   return new Promise((resolve) => {
     const { width, height } = getSvgSize(svgText);
+    const normalizedSvg = normalizeSvgForRaster(svgText, width, height);
     const image = new window.Image();
     const url = URL.createObjectURL(
-      new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }),
+      new Blob([normalizedSvg], { type: "image/svg+xml;charset=utf-8" }),
     );
 
     image.onload = () => {
