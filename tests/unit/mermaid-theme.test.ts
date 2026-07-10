@@ -7,6 +7,7 @@ import {
   getMermaidThemeConfig,
   isValidHexColor,
   normalizeHexColor,
+  transferMermaidTheme,
 } from "@/features/rendering/mermaid-theme";
 
 const FLOWCHART = "flowchart LR\n  A --> B";
@@ -167,6 +168,41 @@ describe("applyMermaidBaseTheme", () => {
   it("removes the theme key (and empty directive) when cleared", () => {
     const withTheme = applyMermaidBaseTheme(FLOWCHART, "dark");
     expect(applyMermaidBaseTheme(withTheme, null)).toBe(FLOWCHART);
+  });
+});
+
+describe("transferMermaidTheme", () => {
+  const SEQUENCE = "sequenceDiagram\n  A->>B: hi";
+
+  it("carries base theme and variables onto a new template", () => {
+    const themed = applyMermaidThemeVariables(FLOWCHART, {
+      primaryColor: "#ff0000",
+      lineColor: "#0000ff",
+    });
+
+    const result = transferMermaidTheme(themed, SEQUENCE);
+    const config = getMermaidThemeConfig(result);
+    expect(config.theme).toBe("base");
+    expect(config.themeVariables).toEqual({
+      primaryColor: "#ff0000",
+      lineColor: "#0000ff",
+    });
+    expect(result).toContain("sequenceDiagram");
+    expect(result).not.toContain("flowchart");
+  });
+
+  it("carries a built-in theme without variables", () => {
+    const themed = applyMermaidBaseTheme(FLOWCHART, "forest");
+
+    const result = transferMermaidTheme(themed, SEQUENCE);
+    expect(getMermaidThemeConfig(result)).toEqual({
+      theme: "forest",
+      themeVariables: {},
+    });
+  });
+
+  it("returns the template unchanged when there is no customization", () => {
+    expect(transferMermaidTheme(FLOWCHART, SEQUENCE)).toBe(SEQUENCE);
   });
 });
 

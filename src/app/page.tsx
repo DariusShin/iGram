@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mermaid from "mermaid";
 
+import { transferMermaidTheme } from "@/features/rendering/mermaid-theme";
 import { renderPlantUmlPreview } from "@/features/rendering/plantuml-client";
 import {
   applyPlantUmlTheme,
@@ -376,7 +377,11 @@ export default function DiagramWorkspace() {
   const selectTemplate = (templateCode: string) => {
     setDrafts((current) => ({
       ...current,
-      [activeLanguage]: templateCode,
+      // Keep the user's theme customization when swapping Mermaid starters.
+      [activeLanguage]:
+        activeLanguage === "mermaid"
+          ? transferMermaidTheme(current.mermaid, templateCode)
+          : templateCode,
     }));
     setErrors((current) => ({ ...current, [activeLanguage]: "" }));
     setRenderStates((current) => ({ ...current, [activeLanguage]: "waiting" }));

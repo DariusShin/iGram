@@ -291,3 +291,19 @@ export function clearMermaidTheme(source: string): string {
 
   return writeInitConfig(source, config);
 }
+
+/**
+ * Carry the theme customization (theme + themeVariables) from one source onto
+ * another — e.g. keep the user's colors when they switch starter templates.
+ * Returns `to` unchanged when `from` has no theme customization.
+ */
+export function transferMermaidTheme(from: string, to: string): string {
+  const { theme, themeVariables } = getMermaidThemeConfig(from);
+
+  let result = to;
+  if (theme) result = applyMermaidBaseTheme(result, theme);
+  if (Object.keys(themeVariables).length > 0) {
+    result = applyMermaidThemeVariables(result, themeVariables);
+  }
+  return result;
+}
