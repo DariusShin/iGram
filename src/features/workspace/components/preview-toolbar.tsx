@@ -2,6 +2,7 @@
 
 import type { PlantUmlTheme } from "@/features/rendering/plantuml-theme";
 import { ExportMenu } from "@/features/workspace/components/export-menu";
+import { MermaidThemePanel } from "@/features/workspace/components/mermaid-theme-panel";
 import { PlantUmlThemeSelect } from "@/features/workspace/components/plantuml-theme-select";
 import { StatusPill } from "@/features/workspace/components/status-pill";
 import { ZoomControls } from "@/features/workspace/components/zoom-controls";
@@ -17,6 +18,8 @@ interface PreviewToolbarProps {
   activeLanguage: DiagramLanguage;
   selectedPlantUmlTheme: PlantUmlTheme;
   onPlantUmlThemeChange: (theme: PlantUmlTheme) => void;
+  mermaidSource: string;
+  onMermaidSourceChange: (next: string) => void;
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -38,6 +41,8 @@ export function PreviewToolbar({
   activeLanguage,
   selectedPlantUmlTheme,
   onPlantUmlThemeChange,
+  mermaidSource,
+  onMermaidSourceChange,
   zoom,
   onZoomIn,
   onZoomOut,
@@ -61,6 +66,13 @@ export function PreviewToolbar({
           <PlantUmlThemeSelect
             value={selectedPlantUmlTheme}
             onValueChange={onPlantUmlThemeChange}
+          />
+        )}
+
+        {activeLanguage === "mermaid" && (
+          <MermaidThemePanel
+            source={mermaidSource}
+            onSourceChange={onMermaidSourceChange}
           />
         )}
 
