@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { Moon, Sun } from "lucide-react";
+import Link from "next/link";
+import { Info, Moon, Sun } from "lucide-react";
 
 interface WorkspaceHeaderProps {
   isDark: boolean;
@@ -21,7 +22,7 @@ export function WorkspaceHeader({
             alt="iGram logo"
             width={40}
             height={40}
-            priority
+            preload
             className="size-full object-contain"
           />
         </span>
@@ -50,6 +51,15 @@ export function WorkspaceHeader({
             Docs
           </a>
         </div>
+        <Link
+          href="/about"
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-blue-500/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-blue-300"
+          title="About iGram"
+        >
+          <Info className="size-4" aria-hidden="true" />
+          <span className="hidden sm:inline">About</span>
+          <span className="sr-only sm:hidden">About iGram</span>
+        </Link>
         <button
           type="button"
           onClick={onToggleTheme}
