@@ -43,3 +43,6 @@ next-env.d.ts
 
 #documentation
 docs/
+
+# agent scratch files
+.agents/
